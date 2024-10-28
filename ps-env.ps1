@@ -1,0 +1,1 @@
+$Env:Path += ";C:\Users\sclhi\JaiGames\jai-beta-1-057\jai\bin"
