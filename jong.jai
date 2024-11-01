@@ -234,8 +234,8 @@ get_uniform_location :: (program: GLuint, uniform: *u8) -> GLint {
 }
 
 PointColour :: struct {
-  pos: [2]GLfloat;
-  rgba: [4]GLfloat;
+  pos: Vector2;
+  rgba: Vector4;
 }
 
 init_fonts :: () {
@@ -361,10 +361,10 @@ init_gl :: () -> bool {
         // Struggling to get this to actually render a colour ..
         renderdata: [4] PointColour =
           .[
-            .{.[-0.5, -0.5], .[1.0, 0.0, 0.0, 1.0] },
-            .{.[0.5, -0.5], .[1.0, 1.0, 0.0, 1.0] },
-            .{.[0.5, 0.5], .[0.0, 1.0, 0.0, 1.0] },
-            .{.[-0.5, 0.5], .[0.0, 0.0, 1.0, 1.0] }
+            .{.{-0.5, -0.5}, .{1.0, 0.0, 0.0, 1.0} },
+            .{.{0.5, -0.5}, .{1.0, 1.0, 0.0, 1.0} },
+            .{.{0.5, 0.5}, .{0.0, 1.0, 0.0, 1.0} },
+            .{.{-0.5, 0.5}, .{0.0, 0.0, 1.0, 1.0} }
           ];
 
         vertexData: [8] GLfloat =
@@ -415,7 +415,7 @@ render_with_gl :: () {
   // glVertexAttribPointer( xx gVertexPos2DLocation, 2, GL_FLOAT, GL_FALSE, 2 * size_of(GLfloat), null);
 
   glVertexAttribPointer( xx gVertexPos2DLocation, 2, GL_FLOAT, GL_FALSE, size_of(PointColour), cast (*void) 0);
-  glVertexAttribPointer( xx mMultiColorLocation, 4, GL_FLOAT, GL_FALSE, size_of(PointColour), cast (*void) (2 * size_of (GLfloat)));
+  glVertexAttribPointer( xx mMultiColorLocation, 4, GL_FLOAT, GL_FALSE, size_of(PointColour), cast (*void) (size_of(Vector2)));
 
   // Set index data and render
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gIBO);
