@@ -24,6 +24,8 @@ LOG_BUFFER_SIZE :: 512;
 WINDOW_W :: 640;
 WINDOW_H :: 480;
 
+MOVE_SPEED :: 2.0;
+
 key_up, key_down, key_left, key_right : u32;
 
 working_directory_set := false;
@@ -58,8 +60,13 @@ Camera :: struct {
   direction: Vector3; // Points in reverse?
   right: Vector3;
   up: Vector3;
+  // Rotation bits
+  looking_at: Vector2;
+  rotation: Quaternion;
+  pointybits: float;
 }
 
+new_camera_pos: Vector3;
 camera: Camera;
 
 /* OpenGL variables */
@@ -73,6 +80,7 @@ gVertexPos2DLocation: GLint;
 
 gVAO: GLuint;
 gVBO: GLuint;
+gEBO: GLuint;
 
 // Projection matrix
 mProjectionMatrix: Matrix4;
@@ -91,7 +99,7 @@ main :: () {
     Windows.SetProcessDPIAware();
     Windows.timeBeginPeriod(1);
     // This disables prints to console during runtime, fyi.
-    // Windows.disable_runtime_console();
+    // Windows.disable_runtime_console()
   }
 
   window := create_window(WINDOW_W, WINDOW_H, "My Shenanigans");
@@ -101,6 +109,28 @@ main :: () {
   print("GL Version = %\n", to_string(glGetString(GL_VERSION)));
 
   camera = init_camera();
+  new_camera_pos = camera.pos;
+
+  fov := 45.0;
+  transform := make_translation_matrix4(camera.pos);
+
+  view_matrix := make_look_at_matrix(
+    camera.pos,
+    camera.target,
+    UP,
+    false // x is not forward
+  );
+
+  vx, vy, vw, vh := get_dimensions(window, false);
+  aspect_ratio := vw / cast (float) vh;
+
+  // Is using a 'minus Z forward matrix' correct here?
+  projection_matrix := make_projection_matrix(fov * PI / 180.0, aspect_ratio, 0.1, 100.0);
+
+  // Seems silly to compute this MxN every vertex on the shader, but we can worry about that later.
+  viewMatrices.view.mat = view_matrix;
+  viewMatrices.projection.mat = projection_matrix;
+  // It ... worked ? O.o
 
   gl_loaded := init_gl();
   if !gl_loaded {
@@ -112,7 +142,10 @@ main :: () {
   init_fonts();
 
   quit := false;
+  move_input : Vector3;
+
   while !quit {
+    move_input = Vector3.{};
     now := seconds_since_init();
     delta : float64 = now - last_time;
     current_dt = cast(float) delta;
@@ -133,11 +166,15 @@ main :: () {
           }
       }
     }
+    move_input.x = cast (float) is_key_down(xx #char "D") - cast (float) is_key_down(xx #char "A");
+    move_input.z = cast (float) is_key_down(xx #char "S") - cast (float) is_key_down(xx #char "W");
+
+
 
     Simp.clear_render_target(.1, .1, .1, 1);
     Simp.update_window(window);
 
-    render_with_gl(delta);
+    render_with_gl(delta, move_input);
 
     Simp.swap_buffers(window);
 
@@ -160,39 +197,93 @@ init_camera :: () -> Camera {
     cameraTarget,
     cameraDirection,
     cameraRight,
-    cameraUp
+    cameraUp,
+    cameraTarget.xy,
+    Quaternion.{},
+    0,
   };
 }
 
-render_with_gl :: (delta_time: float64) {
+// Things that we define ourselves but they probably should be
+// added to the appropriate modules:
+is_key_down :: inline (key : Input.Key_Code) -> bool #must {
+	return (Input.input_button_states[cast (s64) key] & .DOWN) != 0;
+}
+
+render_with_gl :: (delta_time: float64, move_input: Vector3) {
   // Clear colour buffer
   glClearColor(0.0,0.0,0.0,1.0);
   glClear(GL_COLOR_BUFFER_BIT);
 
-  rotation_radians :=
-    ( 6 * delta_time ) // Degrees/sec rotation slice by delta
-    * // I know it commutes, this took me a while okay.
-    ( PI / 180 ); // Convert to radians.
-
-  // Pick the angle you're rotating
-  rotation_quat := Quaternion.{
-    0, // x
-    0, // y
-    xx sin( rotation_radians / 2 ), // z
-    xx cos( rotation_radians / 2 )  // w
-  };
-
-  // make_look_at_matrix(camera.pos, camera.target, camera.up)
-
+  ROTATION_SMOOTHING := 0.3;
+  camera_rot_speed : float = 0.2;
+  // rot_quat : Quaternion;
+  // set_from_axis_and_angle(*rot_quat, 0, 1, 0, xx (camera_rot_speed * delta_time) * PI / 180.0);
   // Don't start from the identity matrix each time you freaking goober.
-  viewMatrices.model.mat = rotate(viewMatrices.model.mat, rotation_quat);
-  glUniformMatrix4fv(viewMatrices.model.uni, 1, GL_TRUE, *viewMatrices.model.mat._11);
+  // viewMatrices.model.mat = rotate(translate(viewMatrices.model.mat, move_input), rot_quat);
 
-  // Not doing anything with these, yet...
+  mouse_look := xy ( xx Input.mouse_delta_x );
+  camera.looking_at = lerp(camera.looking_at, mouse_look, ROTATION_SMOOTHING) * camera_rot_speed;
+  camera.pointybits += camera.looking_at.x * PI / 180.0;
+  set_from_axis_and_angle(*camera.rotation, 0, -1, 0, camera.pointybits);
+  rot_mat := rotation_matrix(Matrix4, camera.rotation);
+
+  // Hrmmmm....
+  camera.pos += rotate(unit_vector(move_input), camera.rotation) * (MOVE_SPEED * xx delta_time);
+
+  viewMatrices.model.mat = inverse(make_translation_matrix4(camera.pos) * rot_mat);
+
+  //VBO data, combined cube corners and their respective rgb values.
+  // pointData: [24] GLfloat =
+    // .[ 0.5,  0.5, 0.0, 0.2, 0.5, 0.0,
+    //    0.5, -0.5, 0.0, 0.5, 0.2, 0.0,
+    //    -0.5, -0.5, 0.0, 0.0, 0.5, 1.0,
+    //    -0.5,  0.5, 0.0, 1.0, 0.0, 0.5
+    // ];
+  pointData: [3][5] GLfloat =
+    .[
+      .[-0.5, -0.5, 1.0, 1.0, 0.0],
+      .[0.5, -0.5, 0.0, 1.0, 0.0],
+      .[0.0, 0.5, 1.0, 0.0, 0.0],
+    ];
+
+  indices: [6] GLfloat =
+    .[ 0, 1, 3,
+       1, 2, 3
+     ];
+
+  glGenVertexArrays(1, *gVAO);
+
+  glGenBuffers(1, *gVBO);
+  // glGenBuffers(1, *gEBO);
+
+  glBindVertexArray(gVAO);
+
+  // Bind our first VBO to store vertex 2D position data
+  glBindBuffer(GL_ARRAY_BUFFER, gVBO);
+  // Copy vertex data from the point data array
+  glBufferData(GL_ARRAY_BUFFER, 15 * size_of(GLfloat), pointData.data, GL_STATIC_DRAW);
+
+  // Define how we navigate the triangles
+  // glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gEBO);
+  // glBufferData(GL_ELEMENT_ARRAY_BUFFER, 6 * size_of(GLfloat), indices.data, GL_STATIC_DRAW);
+
+  // Specify that our coordinate data is going to into attribute index 0 and contains three floats.
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * size_of(GLfloat), cast (*void) 0);
+  // Enable this attribute index
+  glEnableVertexAttribArray(0);
+
+  // Specify that our coordinate data is going to into attribute index 0 and contains two floats.
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * size_of(GLfloat), cast (*void) (3 * size_of(GLfloat)));
+  // Enable this attribute index
+  glEnableVertexAttribArray(1);
+
+  glUniformMatrix4fv(viewMatrices.model.uni, 1, GL_TRUE, *viewMatrices.model.mat._11);
   glUniformMatrix4fv(viewMatrices.view.uni, 1, GL_TRUE, *viewMatrices.view.mat._11);
   glUniformMatrix4fv(viewMatrices.projection.uni, 1, GL_TRUE, *viewMatrices.projection.mat._11);
 
   glDrawArrays(GL_TRIANGLES, 0, 3);
+  // glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, cast (*void) 0);
 }
 
 init_gl :: () -> bool {
@@ -276,38 +367,9 @@ init_gl :: () -> bool {
         glDeleteProgram(glProgram);
         success = false;
       } else {
-
-        //VBO data
-        pointData: [3][5] GLfloat =
-          .[
-            .[0.0, 0.5, 1.0, 0.0, 0.0],
-            .[0.5, -0.5, 0.0, 1.0, 0.0],
-            .[-0.5, -0.5, 1.0, 1.0, 0.0],
-          ];
-
-        glGenVertexArrays(1, *gVAO);
-        glBindVertexArray(gVAO);
-
-        glGenBuffers(1, *gVBO);
-
-        // Bind our first VBO to store vertex 2D position data
-        glBindBuffer( GL_ARRAY_BUFFER, gVBO );
-        // Copy vertex data from the point data array
-        glBufferData(GL_ARRAY_BUFFER, 15 * size_of(GLfloat), pointData.data, GL_STATIC_DRAW);
-
-        // Specify that our coordinate data is going to into attribute index 0 and contains two floats.
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * size_of(GLfloat), cast (*void) 0);
-        // Enable this attribute index
-        glEnableVertexAttribArray(0);
-
-        // Specify that our coordinate data is going to into attribute index 0 and contains two floats.
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * size_of(GLfloat), cast (*void) (3 * size_of(GLfloat)));
-        // Enable this attribute index
-        glEnableVertexAttribArray(1);
-
-        // Bind quad shader programs
+        // Bind quad shader programs.
         glUseProgram(glProgram);
-
+        // Fetch our shader matrix uniforms.
         viewMatrices.model.uni = get_uniform_location(glProgram, "model");
         viewMatrices.view.uni = get_uniform_location(glProgram, "view");
         viewMatrices.projection.uni = get_uniform_location(glProgram, "projection");
@@ -320,7 +382,7 @@ init_gl :: () -> bool {
 
 #run {
   set_working_directory(#filepath);
-  main();
+  // main();
 }
 
 draw_some_text :: () {
