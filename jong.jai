@@ -217,21 +217,22 @@ render_with_gl :: (delta_time: float64, move_input: Vector3) {
 
   ROTATION_SMOOTHING := 0.3;
   camera_rot_speed : float = 0.2;
-  // rot_quat : Quaternion;
-  // set_from_axis_and_angle(*rot_quat, 0, 1, 0, xx (camera_rot_speed * delta_time) * PI / 180.0);
-  // Don't start from the identity matrix each time you freaking goober.
-  // viewMatrices.model.mat = rotate(translate(viewMatrices.model.mat, move_input), rot_quat);
 
+  // Only interested in rotation left<->right
   mouse_look := xy ( xx Input.mouse_delta_x );
+  // Smooth our camera movement.
   camera.looking_at = lerp(camera.looking_at, mouse_look, ROTATION_SMOOTHING) * camera_rot_speed;
+  // Determine the radians of the thing we're looking at and change our camera
   camera.pointybits += camera.looking_at.x * PI / 180.0;
+  // Build the Quaternion for where we are looking at on the x-rotation, I think..
   set_from_axis_and_angle(*camera.rotation, 0, -1, 0, camera.pointybits);
+  // Build a rotation matrix from the quaternion
   rot_mat := rotation_matrix(Matrix4, camera.rotation);
-
-  // Hrmmmm....
+  // Adjust our camera position by speed and delta'd rotation.
   camera.pos += rotate(unit_vector(move_input), camera.rotation) * (MOVE_SPEED * xx delta_time);
-
-  viewMatrices.model.mat = inverse(make_translation_matrix4(camera.pos) * rot_mat);
+  // Update our VIEW matrix with the rotated camera position.
+  viewMatrices.view.mat = inverse(make_translation_matrix4(camera.pos) * rot_mat);
+  // TODO: apply projection*view before sending it to the shader to avoid the extra work.
 
   //VBO data, combined cube corners and their respective rgb values.
   // pointData: [24] GLfloat =
